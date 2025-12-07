@@ -12,6 +12,11 @@ use serde::{Serialize, Deserialize};
 use enigo::{Enigo, Mouse, Button, Coordinate, Settings, Direction};
 use rdev::{listen, Event, EventType, Key};
 
+use windows::Win32::UI::HiDpi::{
+    SetProcessDpiAwarenessContext,
+    DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+};
+
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub enum Marble {
@@ -152,6 +157,10 @@ struct SearchState {
 }
 
 fn main() -> Result<()> {
+    unsafe {
+        // Ignore failure
+        let _ = SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    }
     // create_board()?;
     let board = load_board()?;
 
