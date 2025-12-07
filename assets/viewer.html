@@ -1,0 +1,693 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <title>Board Viewer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <style>
+        :root {
+            --bg: #0f1115;
+            --panel: #151923;
+            --panel-2: #0c0f16;
+            --text: #e6e6e6;
+            --muted: #9aa4b2;
+            --accent: #d14b4b;
+            --hex-stroke: #2a3242;
+            --hex-fill: #0f1420;
+        }
+
+        body {
+            margin: 0;
+            background: linear-gradient(180deg, var(--bg), #0a0c12);
+            color: var(--text);
+            font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+            height: 100vh;
+            display: grid;
+            grid-template-columns: 320px 1fr;
+        }
+
+        .sidebar {
+            background: linear-gradient(180deg, var(--panel), var(--panel-2));
+            border-right: 1px solid #1f2633;
+            padding: 16px 14px;
+            overflow: auto;
+        }
+
+        .title {
+            font-size: 18px;
+            font-weight: 650;
+            margin: 0 0 8px 0;
+        }
+
+        .sub {
+            color: var(--muted);
+            font-size: 12px;
+            margin-bottom: 14px;
+        }
+
+        .section {
+            margin-top: 14px;
+            padding-top: 14px;
+            border-top: 1px solid #1f2633;
+        }
+
+        label {
+            display: block;
+            font-size: 12px;
+            color: var(--muted);
+            margin: 10px 0 6px;
+        }
+
+        textarea {
+            width: 100%;
+            min-height: 180px;
+            resize: vertical;
+            background: #0b0f18;
+            color: var(--text);
+            border: 1px solid #20283a;
+            border-radius: 10px;
+            padding: 10px;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: 11px;
+            line-height: 1.35;
+            outline: none;
+        }
+
+        input[type="range"] {
+            width: 100%;
+        }
+
+        .row {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        button {
+            background: #1a2233;
+            color: var(--text);
+            border: 1px solid #2a3446;
+            border-radius: 10px;
+            padding: 8px 10px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        button:hover { border-color: #3a4660; }
+
+        .badge {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: #111827;
+            border: 1px solid #263248;
+            font-size: 10px;
+            color: var(--muted);
+        }
+
+        .viewer {
+            position: relative;
+            overflow: hidden;
+        }
+
+        /* pan/zoom friendly */
+        svg {
+            width: 100%;
+            height: 100%;
+            display: block;
+            background:
+                    radial-gradient(circle at 20% 10%, rgba(255,255,255,0.04), transparent 40%),
+                    radial-gradient(circle at 80% 90%, rgba(255,255,255,0.03), transparent 40%);
+        }
+
+        select {
+            width: 100%;
+            background: #0b0f18;
+            color: var(--text);
+            border: 1px solid #20283a;
+            border-radius: 10px;
+            padding: 8px 10px;
+            font-size: 12px;
+            outline: none;
+        }
+
+
+        .hex {
+            stroke: var(--hex-stroke);
+            stroke-width: 1;
+            fill: var(--hex-fill);
+        }
+
+        .hex.marble {
+            stroke: #3b465b;
+        }
+
+        .hex:hover {
+            stroke: var(--accent);
+            stroke-width: 1.5;
+        }
+
+        .hex-symbol {
+            pointer-events: none;
+            opacity: 0.95;
+        }
+
+        .label {
+            font-size: 9px;
+            fill: #cbd5e1;
+            text-anchor: middle;
+            dominant-baseline: middle;
+            pointer-events: none;
+            opacity: 0.9;
+        }
+
+        .error {
+            color: #ff6b6b;
+            font-size: 11px;
+            white-space: pre-wrap;
+            background: #1a0e12;
+            border: 1px solid #3a1a22;
+            padding: 8px;
+            border-radius: 8px;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+<div class="sidebar">
+    <div class="row" style="justify-content: space-between;">
+        <h1 class="title">Hex Board Viewer</h1>
+        <span class="badge" id="tileCountBadge">0 tiles</span>
+    </div>
+    <div class="sub">
+        Paste your BoardState JSON (with "q,r" marble keys) and render.
+    </div>
+
+    <label for="jsonInput">BoardState JSON</label>
+    <textarea id="jsonInput"></textarea>
+
+    <div class="row" style="margin-top: 8px;">
+        <button id="renderBtn">Render</button>
+        <button id="loadSampleBtn">Load sample</button>
+        <button id="resetViewBtn">Reset view</button>
+    </div>
+
+    <div class="section">
+        <label>Orientation</label>
+        <div class="row">
+            <label style="margin:0;">
+                <input type="radio" name="orient" value="pointy" checked />
+                <span class="badge">pointy-top</span>
+            </label>
+            <label style="margin:0;">
+                <input type="radio" name="orient" value="flat" />
+                <span class="badge">flat-top</span>
+            </label>
+        </div>
+
+        <label for="sizeRange">Hex size</label>
+        <input id="sizeRange" type="range" min="14" max="60" value="28" />
+        <div class="sub">Controls pixel radius for each hex.</div>
+
+        <label>
+            <input id="showCoords" type="checkbox" />
+            Show q,r labels
+        </label>
+    </div>
+
+    <div class="section">
+        <label>Editor</label>
+
+        <label style="margin:0 0 8px 0;">
+            <input id="editMode" type="checkbox" />
+            Enable paint mode
+        </label>
+
+        <label for="elementSelect">Selected element</label>
+        <select id="elementSelect"></select>
+
+        <div class="row" style="margin-top: 8px;">
+            <button id="exportBtn">Export JSON</button>
+            <button id="clearMarblesBtn">Clear marbles</button>
+        </div>
+
+        <div class="sub">
+            Tip: enable paint mode, choose an element, then click tiles to place it.
+            Choose “None” to erase.
+        </div>
+    </div>
+
+
+    <div class="section">
+        <label>Notes</label>
+        <div class="sub">
+            This viewer uses standard axial-to-pixel conversion for pointy/flat layouts.
+            For complex shapes, include a "tiles" array in the JSON so empty tiles render too.
+        </div>
+    </div>
+
+    <div id="errorBox" class="error" style="display:none;"></div>
+</div>
+
+<div class="viewer">
+    <svg id="svg" viewBox="-400 -300 800 600">
+        <g id="root"></g>
+    </svg>
+</div>
+
+<script>
+    /**
+     * Expected JSON:
+     * {
+     *   "tiles": [{"q":0,"r":0}, ...],   // optional, but recommended
+     *   "marbles": {"q,r":"Fire", ...}  // your chosen format
+     * }
+     *
+     * If tiles missing, we infer tiles from marbles keys.
+     */
+
+    const svg = document.getElementById("svg");
+    const root = document.getElementById("root");
+    const jsonInput = document.getElementById("jsonInput");
+    const renderBtn = document.getElementById("renderBtn");
+    const loadSampleBtn = document.getElementById("loadSampleBtn");
+    const resetViewBtn = document.getElementById("resetViewBtn");
+    const sizeRange = document.getElementById("sizeRange");
+    const showCoords = document.getElementById("showCoords");
+    const errorBox = document.getElementById("errorBox");
+    const tileCountBadge = document.getElementById("tileCountBadge");
+
+    const marbleColors = {
+        Fire:   "#741f0d",
+        Water:  "#285854",
+        Earth:  "#1c4314",
+        Air:    "#536d9e",
+        Salt:   "#8c887a",
+        Vitae:  "#917d6e",
+        Mors:   "#28261d",
+        Lead:   "#5c5c64",
+        Tin:    "#9aa0a8",
+        Iron:   "#7c8796",
+        Copper: "#c07a3a",
+        Silver: "#cfd6e1",
+        Gold:   "#d6b64b",
+        Quicksilver: "#b7c0cc"
+    };
+
+    const marbleSymbols = {
+        Fire: "symbols/fire_symbol.png",
+        Water: "symbols/water_symbol.png",
+        Earth: "symbols/earth_symbol.png",
+        Air: "symbols/air_symbol.png",
+        Salt: "symbols/salt_symbol.png",
+        Vitae: "symbols/vitae_symbol.png",
+        Mors: "symbols/mors_symbol.png",
+        Lead: "symbols/lead_symbol.png",
+        Tin: "symbols/tin_symbol.png",
+        Iron: "symbols/iron_symbol.png",
+        Copper: "symbols/copper_symbol.png",
+        Silver: "symbols/silver_symbol.png",
+        Gold: "symbols/gold_symbol.png",
+        Quicksilver: "symbols/quicksilver_symbol.png"
+    }
+
+    const marbleTypes = [
+        "None",
+        "Fire", "Water", "Earth", "Air",
+        "Salt", "Vitae", "Mors",
+        "Lead", "Tin", "Iron", "Copper", "Silver", "Gold",
+        "Quicksilver"
+    ];
+
+    const editMode = document.getElementById("editMode");
+    const elementSelect = document.getElementById("elementSelect");
+    const exportBtn = document.getElementById("exportBtn");
+    const clearMarblesBtn = document.getElementById("clearMarblesBtn");
+
+    function populateElementSelect() {
+        elementSelect.innerHTML = "";
+        for (const t of marbleTypes) {
+            const opt = document.createElement("option");
+            opt.value = t;
+            opt.textContent = t;
+            elementSelect.appendChild(opt);
+        }
+        elementSelect.value = "Fire";
+    }
+
+
+    // --------- axial parsing helpers ----------
+    function parseKey(key) {
+        const parts = key.split(",");
+        if (parts.length !== 2) return null;
+        const q = Number(parts[0].trim());
+        const r = Number(parts[1].trim());
+        if (!Number.isFinite(q) || !Number.isFinite(r)) return null;
+        return { q, r };
+    }
+
+    function keyOf(q, r) { return `${q},${r}`; }
+
+    // --------- layout math ----------
+    function axialToPixel(q, r, size, orientation) {
+        const sqrt3 = Math.sqrt(3);
+        if (orientation === "flat") {
+            // flat-top axial to pixel
+            const x = size * (3/2 * q);
+            const y = size * (sqrt3/2 * q + sqrt3 * r);
+            return { x, y };
+        } else {
+            // pointy-top axial to pixel
+            const x = size * (sqrt3 * q + sqrt3/2 * r);
+            const y = size * (3/2 * r);
+            return { x, y };
+        }
+    }
+
+    function hexCorners(cx, cy, size, orientation) {
+        const corners = [];
+        const angleOffset = (orientation === "flat") ? 0 : 30; // degrees
+        for (let i = 0; i < 6; i++) {
+            const angleDeg = angleOffset + 60 * i;
+            const angleRad = Math.PI / 180 * angleDeg;
+            const x = cx + size * Math.cos(angleRad);
+            const y = cy + size * Math.sin(angleRad);
+            corners.push([x, y]);
+        }
+        return corners;
+    }
+
+    function pointsAttr(corners) {
+        return corners.map(([x,y]) => `${x.toFixed(2)},${y.toFixed(2)}`).join(" ");
+    }
+
+    // --------- viewbox fitting ----------
+    function fitToContent(bounds, padding = 40) {
+        const { minX, minY, maxX, maxY } = bounds;
+        const w = Math.max(10, (maxX - minX) + padding * 2);
+        const h = Math.max(10, (maxY - minY) + padding * 2);
+        const x = minX - padding;
+        const y = minY - padding;
+        svg.setAttribute("viewBox", `${x} ${y} ${w} ${h}`);
+    }
+
+    function emptyBounds() {
+        return { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity };
+    }
+
+    function expandBounds(b, x, y) {
+        b.minX = Math.min(b.minX, x);
+        b.minY = Math.min(b.minY, y);
+        b.maxX = Math.max(b.maxX, x);
+        b.maxY = Math.max(b.maxY, y);
+    }
+
+    // --------- rendering ----------
+    function getOrientation() {
+        return document.querySelector('input[name="orient"]:checked').value;
+    }
+
+    function getSize() {
+        return Number(sizeRange.value);
+    }
+
+    function clearError() {
+        errorBox.style.display = "none";
+        errorBox.textContent = "";
+    }
+
+    function showError(msg) {
+        errorBox.style.display = "block";
+        errorBox.textContent = msg;
+    }
+
+    function normalizeBoardState(raw) {
+        const marbles = raw.marbles && typeof raw.marbles === "object" ? raw.marbles : {};
+        let tiles = [];
+
+        if (Array.isArray(raw.tiles)) {
+            tiles = raw.tiles
+                .map(t => {
+                    if (t && typeof t === "object" && Number.isFinite(t.q) && Number.isFinite(t.r)) {
+                        return { q: t.q, r: t.r };
+                    }
+                    // allow alternative field names if your serializer differs
+                    if (t && typeof t === "object" && Number.isFinite(t.x) && Number.isFinite(t.y)) {
+                        return { q: t.x, r: t.y };
+                    }
+                    return null;
+                })
+                .filter(Boolean);
+        } else {
+            // infer tiles from marble keys
+            tiles = Object.keys(marbles).map(parseKey).filter(Boolean);
+        }
+
+        // Deduplicate tiles
+        const seen = new Set();
+        const uniqTiles = [];
+        for (const t of tiles) {
+            const k = keyOf(t.q, t.r);
+            if (!seen.has(k)) {
+                seen.add(k);
+                uniqTiles.push(t);
+            }
+        }
+
+        return { tiles: uniqTiles, marbles };
+    }
+
+    function renderBoard(rawState) {
+        clearError();
+        root.innerHTML = "";
+
+        const orientation = getOrientation();
+        const size = getSize();
+
+        const state = normalizeBoardState(rawState);
+        const { tiles, marbles } = state;
+
+        tileCountBadge.textContent = `${tiles.length} tiles`;
+
+        if (tiles.length === 0) {
+            showError("No tiles found. Provide a 'tiles' array or at least one marble key.");
+            return;
+        }
+
+        const bounds = emptyBounds();
+
+        for (const t of tiles) {
+            const k = keyOf(t.q, t.r);
+            const marble = marbles[k];
+
+            const { x, y } = axialToPixel(t.q, t.r, size, orientation);
+            const corners = hexCorners(x, y, size, orientation);
+
+            // expand bounds by corners
+            for (const [cx, cy] of corners) expandBounds(bounds, cx, cy);
+
+            const poly = document.createElementNS("http://www.w3.org/2000/svg", "polygon");
+            poly.setAttribute("points", pointsAttr(corners));
+            poly.classList.add("hex");
+            poly.dataset.q = t.q;
+            poly.dataset.r = t.r;
+
+            if (marble) {
+                poly.classList.add("marble");
+                poly.style.fill = marbleColors[marble] ?? "#6b7280";
+                poly.style.opacity = "0.95";
+            }
+
+            const title = document.createElementNS("http://www.w3.org/2000/svg", "title");
+            title.textContent = marble
+                ? `(${t.q}, ${t.r}) — ${marble}`
+                : `(${t.q}, ${t.r})`;
+            poly.appendChild(title);
+
+            root.appendChild(poly);
+
+            if (editMode.checked) {
+                poly.style.cursor = "pointer";
+            }
+
+            poly.addEventListener("click", (ev) => {
+                if (!editMode.checked) return;
+                applyPaint(t.q, t.r);
+            });
+
+            // ---- symbol overlay ----
+            if (marble) {
+                const symbolPath = marbleSymbols[marble];
+                if (symbolPath) {
+                    // Scale symbol relative to hex size.
+                    // size is the hex "radius" in pixels.
+                    const symbolPx = Math.round(size * 1.15); // tweak if you want bigger/smaller
+
+                    const img = document.createElementNS("http://www.w3.org/2000/svg", "image");
+                    img.setAttribute("href", symbolPath);
+                    img.setAttribute("x", (x - symbolPx / 2).toFixed(2));
+                    img.setAttribute("y", (y - symbolPx / 2).toFixed(2));
+                    img.setAttribute("width", symbolPx);
+                    img.setAttribute("height", symbolPx);
+                    img.setAttribute("class", "hex-symbol");
+
+                    // Optional tooltip alignment with the tile
+                    const t = document.createElementNS("http://www.w3.org/2000/svg", "title");
+                    t.textContent = `symbol: ${marble}`;
+                    img.appendChild(t);
+
+                    root.appendChild(img);
+                }
+            }
+
+            // ---- coords overlay ----
+            if (showCoords.checked) {
+                const text = document.createElementNS("http://www.w3.org/2000/svg", "text");
+                text.setAttribute("x", x);
+                text.setAttribute("y", y);
+                text.classList.add("label");
+                text.textContent = `${t.q},${t.r}`;
+                root.appendChild(text);
+            }
+        }
+
+        fitToContent(bounds);
+    }
+
+    // --------- sample ----------
+    function sampleBoard() {
+        // Example: small radius-ish cluster
+        return {
+            tiles: [
+                {q: 0, r: 0}, {q: 1, r: 0}, {q: -1, r: 0},
+                {q: 0, r: 1}, {q: 0, r: -1}, {q: 1, r: -1}, {q: -1, r: 1},
+                {q: 2, r: -1}, {q: -2, r: 1}, {q: 1, r: 1}, {q: -1, r: -1}
+            ],
+            marbles: {
+                "0,0": "Salt",
+                "1,0": "Fire",
+                "-1,0": "Water",
+                "0,1": "Earth",
+                "0,-1": "Air",
+                "1,-1": "Vitae",
+                "-1,1": "Mors",
+                "2,-1": "Lead",
+                "-2,1": "Tin"
+            }
+        };
+    }
+
+    let currentState = null;
+
+    function makeEmptyStateFromTiles(tiles) {
+        return { tiles: tiles.slice(), marbles: {} };
+    }
+
+    // --------- painting ----------
+
+    function applyPaint(q, r) {
+        if (!currentState) return;
+
+        const k = keyOf(q, r);
+        const sel = elementSelect.value;
+
+        if (sel === "None") {
+            delete currentState.marbles[k];
+        } else {
+            currentState.marbles[k] = sel;
+        }
+
+        renderBoard(currentState);
+    }
+
+    // --------- wiring ----------
+    function tryParseAndRender() {
+        clearError();
+        let raw;
+        try {
+            raw = JSON.parse(jsonInput.value);
+        } catch (e) {
+            showError(String(e));
+            return;
+        }
+
+        // Normalize and store as current editable state
+        const norm = normalizeBoardState(raw);
+        currentState = {
+            tiles: norm.tiles,
+            marbles: { ...norm.marbles }
+        };
+
+        renderBoard(currentState);
+    }
+
+
+    renderBtn.addEventListener("click", tryParseAndRender);
+
+    loadSampleBtn.addEventListener("click", () => {
+        const s = sampleBoard();
+        jsonInput.value = JSON.stringify(s, null, 2);
+
+        const norm = normalizeBoardState(s);
+        currentState = { tiles: norm.tiles, marbles: { ...norm.marbles } };
+
+        renderBoard(currentState);
+    });
+
+    exportBtn.addEventListener("click", () => {
+        clearError();
+
+        if (!currentState) {
+            showError("Nothing to export. Load or paste a board first.");
+            return;
+        }
+
+        // Ensure stable schema:
+        // - tiles: [{q,r}]
+        // - marbles: {"q,r":"Type"}
+        const out = {
+            tiles: currentState.tiles.map(t => ({ x: t.q, y: t.r })),
+            marbles: { ...currentState.marbles }
+        };
+
+        const text = JSON.stringify(out, null, 2);
+        jsonInput.value = text; // put into textarea for easy copy/save
+    });
+
+    clearMarblesBtn.addEventListener("click", () => {
+        if (!currentState) return;
+        currentState.marbles = {};
+        renderBoard(currentState);
+    });
+
+    resetViewBtn.addEventListener("click", () => {
+        svg.setAttribute("viewBox", "-400 -300 800 600");
+    });
+
+    sizeRange.addEventListener("input", () => {
+        // re-render if JSON parses
+        try { tryParseAndRender(); } catch {}
+    });
+
+    showCoords.addEventListener("change", () => {
+        try { tryParseAndRender(); } catch {}
+    });
+
+    document.querySelectorAll('input[name="orient"]').forEach(r => {
+        r.addEventListener("change", () => {
+            try { tryParseAndRender(); } catch {}
+        });
+    });
+
+    // boot with sample
+    const initial = sampleBoard();
+    jsonInput.value = JSON.stringify(initial, null, 2);
+
+    const norm = normalizeBoardState(initial);
+    currentState = { tiles: norm.tiles, marbles: { ...norm.marbles } };
+
+    renderBoard(currentState);
+    populateElementSelect();
+</script>
+</body>
+</html>
