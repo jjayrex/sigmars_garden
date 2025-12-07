@@ -2,77 +2,15 @@ use std::collections::{HashMap, HashSet, BTreeMap, hash_map::DefaultHasher, };
 use std::fs;
 use std::hash::{Hash, Hasher};
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::thread;
 
-use anyhow::{Result, bail, anyhow, Context};
+use anyhow::{Result, anyhow, Context};
 use hexx::*;
 use serde::{Serialize, Deserialize};
 
 use enigo::{Enigo, Mouse, Button, Coordinate, Settings, Direction};
 use rdev::{listen, Event, EventType, Key};
-
-#[derive(Debug)]
-struct SolverStats {
-    start: Instant,
-    nodes: u64,
-    max_depth: usize,
-    best_remaining: usize,
-    last_log: Instant,
-    log_every_nodes: u64,
-    log_every_time: Duration,
-}
-
-impl SolverStats {
-    fn new(initial_remaining: usize) -> Self {
-        let now = Instant::now();
-        Self {
-            start: now,
-            nodes: 0,
-            max_depth: 0,
-            best_remaining: initial_remaining,
-            last_log: now,
-            log_every_nodes: 50_000,
-            log_every_time: Duration::from_secs(1),
-        }
-    }
-
-    fn on_node(
-        &mut self,
-        depth: usize,
-        remaining: usize,
-        moves_len: usize,
-        seen_len: usize,
-    ) {
-        self.nodes += 1;
-        if depth > self.max_depth {
-            self.max_depth = depth;
-        }
-        if remaining < self.best_remaining {
-            self.best_remaining = remaining;
-        }
-
-        let now = Instant::now();
-        let time_due = now.duration_since(self.last_log) >= self.log_every_time;
-        let node_due = self.nodes % self.log_every_nodes == 0;
-
-        if time_due || node_due {
-            let elapsed = now.duration_since(self.start);
-            eprintln!(
-                "[solver] nodes={} depth={} max_depth={} remaining={} best_remaining={} moves={} seen={} elapsed={:.2?}",
-                self.nodes,
-                depth,
-                self.max_depth,
-                remaining,
-                self.best_remaining,
-                moves_len,
-                seen_len,
-                elapsed
-            );
-            self.last_log = now;
-        }
-    }
-}
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
@@ -202,9 +140,9 @@ struct BoardState {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-struct Move {
-    a: Hex,
-    b: Hex,
+enum Move {
+    Pair { a: Hex, b: Hex },
+    ClickGold { at: Hex },
 }
 
 #[derive(Debug, Clone)]
@@ -220,11 +158,11 @@ fn main() -> Result<()> {
     let solution = solve_board(&board).ok_or_else(|| anyhow!("No solution found"))?;
 
     println!("Found solution with {} moves.", solution.len());
-    println!("Press F8 to execute...");
+    println!("Press Num0 to execute...");
 
-    wait_for_f8()?;
+    wait_for_key()?;
 
-    execute_solution(&board.screen_points, &solution)?;
+    execute_solution(&board, &solution)?;
 
     Ok(())
 }
@@ -285,7 +223,7 @@ fn build_hex_to_screen_map_for_radius(
         rows.len()
     );
 
-    let mut row_vec: Vec<(i32, Vec<ScreenPoint>)> = rows
+    let row_vec: Vec<(i32, Vec<ScreenPoint>)> = rows
         .into_iter()
         .map(|(y, mut ps)| {
             ps.sort_by_key(|p| p.x);
@@ -426,85 +364,73 @@ fn free_marbles(
         .collect()
 }
 
-fn parse_points(list: &[&str]) -> Result<Vec<ScreenPoint>> {
-    let mut out = Vec::with_capacity(list.len());
-    for s in list {
-        let (xs, ys) = s
-            .split_once(',')
-            .with_context(|| format!("invalid point '{s}', expected 'x,y'"))?;
-        let x: i32 = xs.trim().parse().with_context(|| format!("bad x in '{s}'"))?;
-        let y: i32 = ys.trim().parse().with_context(|| format!("bad y in '{s}'"))?;
-        out.push(ScreenPoint { x, y });
-    }
-    Ok(out)
-}
+// fn parse_points(list: &[&str]) -> Result<Vec<ScreenPoint>> {
+//     let mut out = Vec::with_capacity(list.len());
+//     for s in list {
+//         let (xs, ys) = s
+//             .split_once(',')
+//             .with_context(|| format!("invalid point '{s}', expected 'x,y'"))?;
+//         let x: i32 = xs.trim().parse().with_context(|| format!("bad x in '{s}'"))?;
+//         let y: i32 = ys.trim().parse().with_context(|| format!("bad y in '{s}'"))?;
+//         out.push(ScreenPoint { x, y });
+//     }
+//     Ok(out)
+// }
 
-fn generate_hexes_row_major(row_counts: &[i32]) -> Vec<Hex> {
-    let mid = (row_counts.len() as i32 - 1) / 2;
-    let mut out = Vec::new();
+// fn generate_hexes_row_major(row_counts: &[i32]) -> Vec<Hex> {
+//     let mid = (row_counts.len() as i32 - 1) / 2;
+//     let mut out = Vec::new();
+//
+//     for (i, &len) in row_counts.iter().enumerate() {
+//         let r = i as i32 - mid;
+//         let start_q = -((len - 1) / 2);
+//
+//         for dx in 0..len {
+//             let q = start_q + dx;
+//             out.push(hex(q, r));
+//         }
+//     }
+//
+//     out
+// }
 
-    for (i, &len) in row_counts.iter().enumerate() {
-        let r = i as i32 - mid;
-        let start_q = -((len - 1) / 2);
-
-        for dx in 0..len {
-            let q = start_q + dx;
-            out.push(hex(q, r));
-        }
-    }
-
-    out
-}
-
-fn build_hex_to_screen_map(
-    row_counts: &[i32],
-    points: &[ScreenPoint],
-) -> Result<HashMap<Hex, ScreenPoint>> {
-    let expected: i32 = row_counts.iter().sum();
-    if points.len() as i32 != expected {
-        bail!(
-            "point count mismatch: got {}, expected {} from row_counts",
-            points.len(),
-            expected
-        );
-    }
-
-    let hexes = generate_hexes_row_major(row_counts);
-
-    if hexes.len() != points.len() {
-        bail!(
-            "internal mismatch: hexes {} vs points {}",
-            hexes.len(),
-            points.len()
-        );
-    }
-
-    let map = hexes
-        .into_iter()
-        .zip(points.iter().copied())
-        .collect::<HashMap<Hex, ScreenPoint>>();
-
-    Ok(map)
-}
+// fn build_hex_to_screen_map(
+//     row_counts: &[i32],
+//     points: &[ScreenPoint],
+// ) -> Result<HashMap<Hex, ScreenPoint>> {
+//     let expected: i32 = row_counts.iter().sum();
+//     if points.len() as i32 != expected {
+//         bail!(
+//             "point count mismatch: got {}, expected {} from row_counts",
+//             points.len(),
+//             expected
+//         );
+//     }
+//
+//     let hexes = generate_hexes_row_major(row_counts);
+//
+//     if hexes.len() != points.len() {
+//         bail!(
+//             "internal mismatch: hexes {} vs points {}",
+//             hexes.len(),
+//             points.len()
+//         );
+//     }
+//
+//     let map = hexes
+//         .into_iter()
+//         .zip(points.iter().copied())
+//         .collect::<HashMap<Hex, ScreenPoint>>();
+//
+//     Ok(map)
+// }
 
 fn can_match_pair(
     m1: Marble,
     m2: Marble,
     next_metal_index: usize,
-    remaining_count: usize,
 ) -> bool {
     use Marble::*;
-
-    // Gold-last strict rule:
-    // Only allow Gold with Quicksilver when it's the final pair.
-    if m1 == Gold || m2 == Gold {
-        // must be exactly 2 remaining marbles
-        if remaining_count != 2 {
-            return false;
-        }
-        // and the other must be Quicksilver
-        return (m1 == Gold && m2 == Quicksilver) || (m2 == Gold && m1 == Quicksilver);
-    }
 
     // Cardinal exact match
     if m1.is_cardinal() && m2.is_cardinal() {
@@ -558,21 +484,39 @@ fn possible_moves(
     tiles_set: &HashSet<Hex>,
     state: &SearchState,
 ) -> Vec<Move> {
-    let free = free_marbles(tiles_set, &state.marbles);
     let remaining = state.marbles.len();
 
+    if remaining == 1 {
+        if let Some((&h, &m)) = state.marbles.iter().next() {
+            if m == Marble::Gold && is_marble_free(h, tiles_set, &state.marbles) {
+                return vec![Move::ClickGold { at: h }];
+            }
+        }
+        return vec![];
+    }
+
+    let free = free_marbles(tiles_set, &state.marbles);
     let mut moves = Vec::new();
 
     for i in 0..free.len() {
         let a = free[i];
         let ma = state.marbles[&a];
 
+        // Gold cannot be paired at all
+        if ma == Marble::Gold {
+            continue;
+        }
+
         for j in (i + 1)..free.len() {
             let b = free[j];
             let mb = state.marbles[&b];
 
-            if can_match_pair(ma, mb, state.next_metal_index, remaining) {
-                moves.push(Move { a, b });
+            if mb == Marble::Gold {
+                continue;
+            }
+
+            if can_match_pair(ma, mb, state.next_metal_index) {
+                moves.push(Move::Pair { a, b });
             }
         }
     }
@@ -582,24 +526,32 @@ fn possible_moves(
 
 fn apply_move(state: &SearchState, mv: Move) -> SearchState {
     let mut marbles = state.marbles.clone();
-    marbles.remove(&mv.a);
-    marbles.remove(&mv.b);
+
+    match mv {
+        Move::Pair { a, b } => {
+            marbles.remove(&a);
+            marbles.remove(&b);
+        }
+        Move::ClickGold { at } => {
+            marbles.remove(&at);
+        }
+    }
 
     let next_metal_index = advance_metal_index(&marbles, state.next_metal_index);
 
     SearchState { marbles, next_metal_index }
 }
 
-fn newly_freed_count(
-    tiles_set: &HashSet<Hex>,
-    before: &HashMap<Hex, Marble>,
-    after: &HashMap<Hex, Marble>,
-) -> usize {
-    let free_before: HashSet<Hex> = free_marbles(tiles_set, before).into_iter().collect();
-    let free_after: HashSet<Hex> = free_marbles(tiles_set, after).into_iter().collect();
-
-    free_after.difference(&free_before).count()
-}
+// fn newly_freed_count(
+//     tiles_set: &HashSet<Hex>,
+//     before: &HashMap<Hex, Marble>,
+//     after: &HashMap<Hex, Marble>,
+// ) -> usize {
+//     let free_before: HashSet<Hex> = free_marbles(tiles_set, before).into_iter().collect();
+//     let free_after: HashSet<Hex> = free_marbles(tiles_set, after).into_iter().collect();
+//
+//     free_after.difference(&free_before).count()
+// }
 
 fn solve_board(board: &BoardState) -> Option<Vec<Move>> {
     let tiles_set: HashSet<Hex> = board.tiles.iter().cloned().collect();
@@ -611,25 +563,23 @@ fn solve_board(board: &BoardState) -> Option<Vec<Move>> {
 
     let mut path = Vec::new();
     let mut seen: HashSet<u64> = HashSet::new();
-    let mut stats = SolverStats::new(start.marbles.len());
 
-    dfs(&tiles_set, &start, &mut path, &mut seen, &mut stats)
+    dfs(&tiles_set, &start, &mut path, &mut seen)
 }
 
-fn state_key(state: &SearchState) -> Vec<(Hex, Marble)> {
-    // Stable key for visited detection.
-    // For small boards this is fine.
-    let mut v: Vec<_> = state.marbles.iter().map(|(h, m)| (*h, *m)).collect();
-    v.sort_by_key(|(h, _)| (h.x, h.y));
-    v
-}
+// fn state_key(state: &SearchState) -> Vec<(Hex, Marble)> {
+//     // Stable key for visited detection.
+//     // For small boards this is fine.
+//     let mut v: Vec<_> = state.marbles.iter().map(|(h, m)| (*h, *m)).collect();
+//     v.sort_by_key(|(h, _)| (h.x, h.y));
+//     v
+// }
 
 fn dfs(
     tiles_set: &HashSet<Hex>,
     state: &SearchState,
     path: &mut Vec<Move>,
     seen: &mut HashSet<u64>,
-    stats: &mut SolverStats,
 ) -> Option<Vec<Move>> {
     if state.marbles.is_empty() {
         return Some(path.clone());
@@ -641,9 +591,6 @@ fn dfs(
     }
 
     let mut moves = possible_moves(tiles_set, state);
-    let remaining = state.marbles.len();
-
-    stats.on_node(path.len(), remaining, moves.len(), seen.len());
 
     if moves.is_empty() {
         return None;
@@ -652,13 +599,17 @@ fn dfs(
     // Order moves by "newly freed" descending
     moves.sort_by_key(|mv| {
         let next = apply_move(state, *mv);
-        let gain = local_newly_freed_gain(
-            tiles_set,
-            &state.marbles,
-            &next.marbles,
-            mv.a,
-            mv.b,
-        );
+
+        let gain = match *mv {
+            Move::Pair { a, b } => local_newly_freed_gain(
+                tiles_set,
+                &state.marbles,
+                &next.marbles,
+                a, b,
+            ),
+            Move::ClickGold { .. } => 999, // always best when available
+        };
+
         std::cmp::Reverse(gain)
     });
 
@@ -666,7 +617,7 @@ fn dfs(
         let next = apply_move(state, mv);
         path.push(mv);
 
-        if let Some(sol) = dfs(tiles_set, &next, path, seen, stats) {
+        if let Some(sol) = dfs(tiles_set, &next, path, seen) {
             return Some(sol);
         }
 
@@ -676,13 +627,13 @@ fn dfs(
     None
 }
 
-fn wait_for_f8() -> Result<()> {
+fn wait_for_key() -> Result<()> {
     let (tx, rx) = mpsc::channel::<()>();
 
     // rdev::listen blocks the current thread, so run it in a dedicated thread
     let handle = thread::spawn(move || {
         let callback = move |event: Event| {
-            if let EventType::KeyPress(Key::F8) = event.event_type {
+            if let EventType::KeyPress(Key::Kp0) = event.event_type {
                 let _ = tx.send(());
             }
         };
@@ -692,7 +643,7 @@ fn wait_for_f8() -> Result<()> {
     });
 
     // Wait until we receive the signal
-    rx.recv().context("failed to receive F8 signal")?;
+    rx.recv().context("failed to receive Num0 signal")?;
 
     // We cannot reliably stop rdev listener cleanly in all setups;
     // detach thread by not joining (it will likely keep running).
@@ -720,33 +671,35 @@ impl Clicker {
 }
 
 fn execute_solution(
-    screen_points: &HashMap<Hex, ScreenPoint>,
+    board: &BoardState,
     moves: &[Move],
 ) -> Result<()> {
-    if moves.is_empty() {
-        return Ok(());
-    }
-
     let mut clicker = Clicker::new();
 
-    // You can tune these
-    let pre_click_delay = Duration::from_millis(40);
     let between_pair_clicks = Duration::from_millis(120);
     let after_pair_delay = Duration::from_millis(360);
+    let after_single_delay = Duration::from_millis(240);
 
     for mv in moves {
-        let pa = screen_points.get(&mv.a)
-            .with_context(|| format!("missing screen point for hex {:?}", mv.a))?;
-        let pb = screen_points.get(&mv.b)
-            .with_context(|| format!("missing screen point for hex {:?}", mv.b))?;
+        match *mv {
+            Move::Pair { a, b } => {
+                let pa = board.screen_points.get(&a)
+                    .with_context(|| format!("missing screen point for {:?}", a))?;
+                let pb = board.screen_points.get(&b)
+                    .with_context(|| format!("missing screen point for {:?}", b))?;
 
-        thread::sleep(pre_click_delay);
-        clicker.move_and_click(pa.x, pa.y);
-
-        thread::sleep(between_pair_clicks);
-        clicker.move_and_click(pb.x, pb.y);
-
-        thread::sleep(after_pair_delay);
+                clicker.move_and_click(pa.x, pa.y);
+                thread::sleep(between_pair_clicks);
+                clicker.move_and_click(pb.x, pb.y);
+                thread::sleep(after_pair_delay);
+            }
+            Move::ClickGold { at } => {
+                let p = board.screen_points.get(&at)
+                    .with_context(|| format!("missing screen point for {:?}", at))?;
+                clicker.move_and_click(p.x, p.y);
+                thread::sleep(after_single_delay);
+            }
+        }
     }
 
     Ok(())
